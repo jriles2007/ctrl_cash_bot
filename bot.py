@@ -1,68 +1,71 @@
-from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes
-import threading
-import os
+from config import API_TOKEN
+import telebot
+from telebot import types
 import stripe
 
-# Load tokens from environment
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
-STRIPE_ENDPOINT_SECRET = os.getenv("STRIPE_ENDPOINT_SECRET")
+bot = telebot.TeleBot(token=API_TOKEN)
 
-# Configure Stripe
-stripe.api_key = STRIPE_SECRET_KEY
+# Replace with your actual Stripe secret key
+stripe.api_key = 'your_stripe_secret_key'
 
-# Create Telegram bot app
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+# Plans and their corresponding Stripe payment links
+plans = {
+    "Basic Plan 💳": "price_yourpriceid",  # Use your actual price ID
+}
 
-# /start command handler
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print(f"Received /start from {update.effective_user.username}")
-    keyboard = [
-        [InlineKeyboardButton("Buy Plan 💸", url="https://buy.stripe.com/test_4gw8zUahE3MdcgMdQQ")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Welcome to Ctrl + Cash 👋\nChoose your plan below:", reply_markup=reply_markup)
+# Dictionary to store user subscription status
+user_subscriptions = {}
 
-# Add handler to bot
-telegram_app.add_handler(CommandHandler("start", start))
+@bot.message_handler(commands=['start'])
+def welcome(message):
+    welcome_text = f"User {message.from_user.first_name}, welcome to the bot! Use /plans to see available plans."
+    bot.send_message(message.chat.id, welcome_text)
 
-# Flask web server for Render
-flask_app = Flask(__name__)
+@bot.message_handler(commands=['plans'])
+def show_plans(message):
+    plans_text = (
+        "*Ctrl + Money premium plan:*\n"
+        "- Reselling\n"
+        "- Fakes reselling\n"
+        "- Sports Betting\n"
+        "- Sports Arbitrage"
+    )
+    bot.send_message(message.chat.id, plans_text, parse_mode='Markdown')
 
-@flask_app.route("/")
-def index():
-    return "✅ Bot is running."
+    # Create inline keyboard
+    markup = types.InlineKeyboardMarkup()
 
-# Stripe webhook route
-@flask_app.route("/webhook", methods=["POST"])
-def stripe_webhook():
-    payload = request.get_data(as_text=True)
-    sig_header = request.headers.get('Stripe-Signature')
+    for plan_name, plan_id in plans.items():
+        button = types.InlineKeyboardButton(plan_name, url=create_checkout_session(message.from_user.id))
+        markup.add(button)
 
-    try:
-        event = stripe.Webhook.construct_event(
-            payload, sig_header, STRIPE_ENDPOINT_SECRET
-        )
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    except stripe.error.SignatureVerificationError as e:
-        return jsonify({'error': str(e)}), 400
+    # Send the message with the inline keyboard
+    bot.send_message(message.chat.id, "Select a plan:", reply_markup=markup)
 
-    # Handle the event
-    if event['type'] == 'payment_intent.succeeded':
-        payment_intent = event['data']['object']  # Contains a stripe.PaymentIntent
-        print(f"PaymentIntent was successful! {payment_intent}")
-        # Here you can send a message to the user or update your database
+def create_checkout_session(user_id):
+    session = stripe.checkout.Session.create(
+        payment_method_types=['card'],
+        line_items=[
+            {
+                'price': plans["Basic Plan 💳"],  # Use your actual price ID
+                'quantity': 1,
+            },
+        ],
+        mode='subscription',
+        success_url='https://yourdomain.com/success',  # Redirect URL for successful payment
+        cancel_url='https://yourdomain.com/cancel',    # Redirect URL for canceled payment
+        client_reference_id=user_id  # Pass the user ID here
+    )
+    return session.url
 
-    return jsonify({'status': 'success'}), 200
+@bot.message_handler(commands=['cancel'])
+def cancel_subscription(message):
+    user_id = message.from_user.id
+    
+    if user_id in user_subscriptions and user_subscriptions[user_id]:
+        user_subscriptions[user_id] = False  # Update subscription status
+        bot.send_message(message.chat.id, "Your subscription has been canceled.")
+    else:
+        bot.send_message(message.chat.id, "You do not have an active subscription to cancel.")
 
-# Run Telegram bot in background thread
-def run_bot():
-    telegram_app.run_polling()
-
-# Start both bot and Flask
-if __name__ == "__main__":
-    threading.Thread(target=run_bot).start()
-    flask_app.run(host="0.0.0.0", port=10000)
+bot.polling()
