@@ -3,6 +3,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 import stripe
 import os
+import asyncio
+from threading import Thread
 
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -54,9 +56,12 @@ def stripe_webhook():
 
     return '', 200
 
-# Telegram bot runner
+def run_bot():
+    asyncio.run(telegram_app.run_polling())
+
+# Run the bot in a background thread
+Thread(target=run_bot).start()
+
 @app.route("/")
 def index():
-    telegram_app.run_polling()
     return "Bot is running."
-
